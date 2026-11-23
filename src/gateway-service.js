@@ -566,20 +566,25 @@ export class WhatsAppGatewayService extends EventEmitter {
     }
 
     const now = Date.now();
-    const lastRequest = this.otpRequestLog.get(clean);
-    const cooldownMs = 30 * 1000;
-
-    if (lastRequest && now - lastRequest < cooldownMs) {
-      const waitSec = Math.ceil((cooldownMs - (now - lastRequest)) / 1000);
-      return {
-        success: false,
-        cooldownSeconds: waitSec,
-        error: `Please wait ${waitSec}s before requesting a new OTP.`,
-      };
+    // When the caller (owner/customer app) pre-generates the OTP code and passes it as customCode,
+    // the caller has already performed its own rate-limit check against Supabase.
+    // Skip the in-memory cooldown to avoid a double-block; still enforce when gateway generates its own code.
+    const callerProvidedCode = customCode && /^[0-9]{4,8}$/.test(String(customCode).trim());
+    if (!callerProvidedCode) {
+      const lastRequest = this.otpRequestLog.get(clean);
+      const cooldownMs = 30 * 1000;
+      if (lastRequest && now - lastRequest < cooldownMs) {
+        const waitSec = Math.ceil((cooldownMs - (now - lastRequest)) / 1000);
+        return {
+          success: false,
+          cooldownSeconds: waitSec,
+          error: `Please wait ${waitSec}s before requesting a new OTP.`,
+        };
+      }
     }
 
-    const otpCode = customCode && /^[0-9]{4,6}$/.test(customCode.trim())
-      ? customCode.trim()
+    const otpCode = callerProvidedCode
+      ? String(customCode).trim()
       : String(crypto.randomInt(100000, 999999));
 
     const expiryMinutes = 5;

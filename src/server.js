@@ -152,9 +152,12 @@ app.post('/api/whatsapp/send-otp', async (req, res) => {
 // Verify OTP
 app.post('/api/whatsapp/verify-otp', async (req, res) => {
   try {
-    const { phone, token } = req.body || {};
+    const body = req.body || {};
+    const phone = body.phone;
+    // Accept 'token', 'otp', or 'code' — different callers use different field names
+    const token = body.token || body.otp || body.code;
     if (!phone || !token) {
-      return res.status(400).json({ success: false, error: 'phone and token are required.' });
+      return res.status(400).json({ success: false, error: 'phone and otp are required.' });
     }
     const result = await service.verifyOtp(phone, token);
     res.json(result);
