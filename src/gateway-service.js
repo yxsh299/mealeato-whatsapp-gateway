@@ -599,27 +599,21 @@ export class WhatsAppGatewayService extends EventEmitter {
     });
     this.otpRequestLog.set(clean, now);
 
-    // Save challenge to Supabase
-    try {
-      const supabase = getSupabase();
-      if (supabase) {
-        await supabase.from('polaris_audit_log').insert({
-          actor_id: '4cd8d158-d394-43b3-aa41-ab7460abb9de',
-          action: 'whatsapp_otp_challenge',
-          target_type: 'whatsapp_otp',
-          target_id: clean,
-          reason: `WhatsApp OTP challenge: ${clean}`,
-          metadata: {
+    // Save challenge to Supabase only when gateway generates its own code (avoid double-write)
+    if (!callerProvidedCode) {
+      try {
+        const supabase = getSupabase();
+        if (supabase) {
+          await supabase.from('otp_challenges').insert({
             phone: clean,
             code: otpCode,
-            expires_at: expiresAt,
-            attempts: 0,
-            created_at: now,
-          },
-        });
+            expires_at: new Date(expiresAt).toISOString(),
+            app_role: 'customer',
+          });
+        }
+      } catch (saveErr) {
+        console.warn('[GatewayService] Supabase OTP log notice:', saveErr.message);
       }
-    } catch (saveErr) {
-      console.warn('[GatewayService] Supabase OTP log notice:', saveErr.message);
     }
 
     const message = `*Mealeato Verification Code*\n\nYour security OTP is: *${otpCode}*\n\nValid for the next ${expiryMinutes} minutes. Never share this code with anyone.`;
@@ -658,21 +652,20 @@ export class WhatsAppGatewayService extends EventEmitter {
         const supabase = getSupabase();
         if (supabase) {
           const { data: dbRecord } = await supabase
-            .from('polaris_audit_log')
-            .select('id, metadata, created_at')
-            .eq('action', 'whatsapp_otp_challenge')
-            .eq('target_id', clean)
+            .from('otp_challenges')
+            .select('id, code, expires_at, attempts, verified_at')
+            .eq('phone', clean)
             .order('created_at', { ascending: false })
             .limit(1)
             .maybeSingle();
 
-          if (dbRecord?.metadata) {
+          if (dbRecord) {
             challenge = {
               phone: clean,
-              code: String(dbRecord.metadata.code || ''),
-              expiresAt: Number(dbRecord.metadata.expires_at || 0),
-              attempts: Number(dbRecord.metadata.attempts || 0),
-              createdAt: Number(dbRecord.metadata.created_at || 0),
+              code: String(dbRecord.code || ''),
+              expiresAt: new Date(dbRecord.expires_at).getTime(),
+              attempts: Number(dbRecord.attempts || 0),
+              createdAt: 0,
             };
           }
         }

@@ -5,9 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createClient } from '@supabase/supabase-js';
 
-const SYSTEM_ACTOR_ID = '4cd8d158-d394-43b3-aa41-ab7460abb9de';
-const TARGET_TYPE = 'whatsapp_session_backup';
-const TARGET_ID = 'mealeato_whatsapp_session';
+const APP_CONFIG_KEY = 'whatsapp_session_backup';
 
 let supabaseClient = null;
 
@@ -41,20 +39,17 @@ export async function restoreSessionFromSupabase(sessionDir) {
 
     console.log('[SessionSync] Local session missing. Querying Supabase for saved session backup...');
     const { data, error } = await supabase
-      .from('polaris_audit_log')
-      .select('metadata, created_at')
-      .eq('target_type', TARGET_TYPE)
-      .eq('target_id', TARGET_ID)
-      .order('created_at', { ascending: false })
-      .limit(1)
+      .from('app_config')
+      .select('value, updated_at')
+      .eq('key', APP_CONFIG_KEY)
       .maybeSingle();
 
-    if (error || !data || !data.metadata || !data.metadata.files) {
+    if (error || !data || !data.value || !data.value.files) {
       console.log('[SessionSync] No previous session backup found in Supabase.');
       return { restored: false, reason: 'no_cloud_backup' };
     }
 
-    const { files, phoneNumber, sessionId } = data.metadata;
+    const { files, phoneNumber, sessionId } = data.value;
     let restoredCount = 0;
 
     for (const [filename, content] of Object.entries(files)) {
@@ -80,7 +75,7 @@ export async function restoreSessionFromSupabase(sessionDir) {
       phoneNumber,
       sessionId,
       restoredCount,
-      backupDate: data.created_at,
+      backupDate: data.updated_at,
     };
   } catch (err) {
     console.warn('[SessionSync] Restore error:', err.message);
@@ -89,7 +84,8 @@ export async function restoreSessionFromSupabase(sessionDir) {
 }
 
 /**
- * Backs up session files to Supabase after pairing or credential update
+ * Backs up session files to Supabase after pairing or credential update.
+ * Uses UPSERT into app_config (single row, no log bloat).
  */
 export async function backupSessionToSupabase(sessionDir, meta = {}) {
   try {
@@ -118,13 +114,10 @@ export async function backupSessionToSupabase(sessionDir, meta = {}) {
       }
     }
 
-    const { error } = await supabase.from('polaris_audit_log').insert({
-      actor_id: SYSTEM_ACTOR_ID,
-      action: 'whatsapp_session_backup',
-      target_type: TARGET_TYPE,
-      target_id: TARGET_ID,
-      reason: 'Persistent 24/7 session backup',
-      metadata: {
+    // UPSERT into app_config — single row, overwrites previous backup (no log bloat)
+    const { error } = await supabase.from('app_config').upsert({
+      key: APP_CONFIG_KEY,
+      value: {
         phoneNumber: meta.phoneNumber || null,
         sessionId: meta.sessionId || 'mealeato_whatsapp_session',
         status: meta.status || 'CONNECTED',
@@ -132,7 +125,9 @@ export async function backupSessionToSupabase(sessionDir, meta = {}) {
         timestamp: Date.now(),
         files: filesPayload,
       },
-    });
+      updated_at: new Date().toISOString(),
+      updated_by: 'gateway',
+    }, { onConflict: 'key' });
 
     if (error) {
       console.warn('[SessionSync] Supabase backup error:', error.message);
@@ -155,18 +150,8 @@ export async function clearSessionFromSupabase() {
     const supabase = getSupabase();
     if (!supabase) return;
 
-    await supabase.from('polaris_audit_log').insert({
-      actor_id: SYSTEM_ACTOR_ID,
-      action: 'whatsapp_session_cleared',
-      target_type: TARGET_TYPE,
-      target_id: TARGET_ID,
-      reason: 'Manual logout / session disconnected',
-      metadata: {
-        timestamp: Date.now(),
-        files: {},
-      },
-    });
-    console.log('[SessionSync] Cleared session in Supabase.');
+    await supabase.from('app_config').delete().eq('key', APP_CONFIG_KEY);
+    console.log('[SessionSync] Cleared session backup from Supabase app_config.');
   } catch (err) {
     console.warn('[SessionSync] Clear session error:', err.message);
   }
