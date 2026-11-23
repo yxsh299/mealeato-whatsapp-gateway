@@ -1,0 +1,22 @@
+{
+  "name": "mealeato-whatsapp-gateway",
+  "version": "1.0.0",
+  "description": "Persistent 24/7 WhatsApp Gateway Service for Mealeato",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "berryprotocol": "^0.1.10",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "qrcode": "^1.5.3"
+  }
+}
