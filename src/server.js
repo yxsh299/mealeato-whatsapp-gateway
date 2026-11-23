@@ -84,6 +84,17 @@ app.get('/api/whatsapp/qr', async (req, res) => {
 app.post('/api/whatsapp/qr', async (req, res) => {
   try {
     console.log('[Server] POST /api/whatsapp/qr - Explicit QR code refresh requested.');
+    if (service.hasCredentials()) {
+      return res.json({
+        success: true,
+        status: service.status,
+        phoneNumber: service.phoneNumber,
+        message: 'WhatsApp is already linked. To switch devices, use Disconnect first.',
+        qrCode: null,
+        available: false,
+      });
+    }
+
     if (service.status === 'DISCONNECTED') {
       await service.initialize();
     } else {

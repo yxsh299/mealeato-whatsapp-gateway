@@ -35,20 +35,33 @@ export function startKeepAlive(service, options = {}) {
   }
 
   // 2. Continuous socket watchdog: verify client is connected if credentials exist
+  let disconnectedSince = 0;
   setInterval(async () => {
     try {
       if (!service) return;
       const hasSavedCreds = service.hasCredentials();
       const isConnected = service.status === 'CONNECTED';
 
+      if (isConnected) {
+        disconnectedSince = 0;
+        return;
+      }
+
       if (hasSavedCreds && !isConnected && !service.isInitializing) {
-        console.log('[KeepAlive Watchdog] Saved credentials exist but socket is not connected. Re-initiating connection...');
-        await service.initialize().catch((err) => {
-          console.warn('[KeepAlive Watchdog] Auto-reconnect notice:', err.message);
-        });
+        const now = Date.now();
+        if (!disconnectedSince) disconnectedSince = now;
+
+        // If disconnected for more than 60s, trigger recovery
+        if (now - disconnectedSince > 60 * 1000) {
+          console.log('[KeepAlive Watchdog] Connection stalled >60s. Triggering safe reconnect...');
+          disconnectedSince = now;
+          await service.reconnect().catch((err) => {
+            console.warn('[KeepAlive Watchdog] Reconnect notice:', err.message);
+          });
+        }
       }
     } catch (e) {
       console.warn('[KeepAlive Watchdog] Exception:', e.message);
     }
-  }, 45 * 1000); // Check every 45 seconds
+  }, 30 * 1000); // Check every 30 seconds
 }

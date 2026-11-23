@@ -112,7 +112,7 @@ export class WhatsAppGatewayService extends EventEmitter {
     return `${clean}@s.whatsapp.net`;
   }
 
-  scheduleBackupToSupabase() {
+  scheduleBackupToSupabase(delayMs = 2000) {
     clearTimeout(this.backupDebounceTimer);
     this.backupDebounceTimer = setTimeout(() => {
       const activeDir = fs.existsSync(path.join(this.sessionPath, this.sessionId, 'creds.json'))
@@ -124,7 +124,7 @@ export class WhatsAppGatewayService extends EventEmitter {
         sessionId: this.sessionId,
         status: this.status,
       }).catch((e) => console.warn('[GatewayService] Debounced backup warning:', e.message));
-    }, 5000);
+    }, delayMs);
   }
 
   async boot() {
@@ -302,15 +302,15 @@ export class WhatsAppGatewayService extends EventEmitter {
       this.emit('ready', { phoneNumber: this.phoneNumber, sessionId: this.sessionId });
       this.emit('status', this.status);
 
-      // Back up credentials to Supabase
-      this.scheduleBackupToSupabase();
+      // Back up credentials to Supabase immediately (800ms) and debounce further updates
+      this.scheduleBackupToSupabase(800);
     });
 
     this.client.on('connection.close', ({ reason, statusCode }) => {
-      const isManual = reason === 'manual_logout' || statusCode === 401;
+      const isManual = reason === 'manual_logout' || statusCode === 401 || statusCode === 403;
 
       if (isManual) {
-        console.log('[GatewayService] Manual logout or 401 logged out. Clearing session.');
+        console.log('[GatewayService] Manual logout or 401/403 logged out. Clearing session.');
         this.status = 'DISCONNECTED';
         this.phoneNumber = null;
         this.cleanLocalSession();
@@ -318,16 +318,26 @@ export class WhatsAppGatewayService extends EventEmitter {
         this.emit('disconnected', { reason: 'logged_out' });
         this.emit('status', this.status);
       } else {
-        console.log(`[GatewayService] Socket closed (${reason || statusCode}). Scheduling auto-reconnect...`);
-        this.status = 'DISCONNECTED';
+        console.log(`[GatewayService] Socket closed (${reason || statusCode}). Preserving credentials while reconnecting...`);
+        // If we have saved credentials, mark as CONNECTING so Polaris doesn't show offline panic
+        if (this.hasCredentials()) {
+          this.status = 'CONNECTING';
+        } else {
+          this.status = 'DISCONNECTED';
+        }
         this.emit('disconnected', { reason, statusCode });
         this.emit('status', this.status);
 
+        // BerryProtocol has internal auto-reconnect (reconnectDelayMs: 3000, reconnectMaxAttempts: 25).
+        // Only trigger fallback re-initialization if connection remains down after 20 seconds.
         if (this.shouldKeepAlive && this.hasCredentials()) {
           clearTimeout(this.reconnectTimer);
           this.reconnectTimer = setTimeout(() => {
-            this.initialize().catch(() => {});
-          }, 3000);
+            if (this.status !== 'CONNECTED' && this.hasCredentials() && !this.isInitializing) {
+              console.log('[GatewayService] Fallback watchdog: triggering fresh initialization...');
+              this.initialize().catch(() => {});
+            }
+          }, 20000);
         }
       }
     });
@@ -401,7 +411,7 @@ export class WhatsAppGatewayService extends EventEmitter {
     this.status = 'CONNECTING';
     this.pairingCode = null;
     this.pairingPhone = clean;
-    this.sessionId = `mealeato_wa_${Date.now()}`;
+    this.sessionId = 'mealeato_whatsapp_session';
 
     this.client = new BerryProtocol({
       sessionId: this.sessionId,
@@ -475,7 +485,22 @@ export class WhatsAppGatewayService extends EventEmitter {
   }
 
   async reconnect() {
-    await this.disconnect({ cleanSession: false });
+    console.log('[GatewayService] Reconnect requested. Preserving auth credentials...');
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+
+    if (this.client) {
+      try {
+        if (typeof this.client.removeAllListeners === 'function') {
+          this.client.removeAllListeners();
+        }
+        await this.client.disconnect();
+      } catch {}
+      this.client = null;
+    }
+
+    this.status = 'CONNECTING';
+    this.emit('status', this.status);
     await this.initialize();
   }
 
